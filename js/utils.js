@@ -1,0 +1,12 @@
+export const $ = (s, root=document) => root.querySelector(s);
+export const $$ = (s, root=document) => [...root.querySelectorAll(s)];
+export const uid = () => crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+export const money = n => new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(Number(n)||0);
+export const btc = n => (Number(n)||0).toFixed(8);
+export const pct = n => `${(Number(n)||0)>=0?'+':''}${(Number(n)||0).toFixed(2)}%`;
+export const dateTime = d => new Date(d).toLocaleString();
+export const escapeHTML = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+export const toast = msg => {const el=$('#toast');el.textContent=msg;el.classList.add('show');clearTimeout(toast.t);toast.t=setTimeout(()=>el.classList.remove('show'),2800)};
+export const download = (name, content, type='application/json') => {const a=document.createElement('a');const u=URL.createObjectURL(new Blob([content],{type}));a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000)};
+export const dateInputNow = () => {const d=new Date(Date.now()-new Date().getTimezoneOffset()*60000);return d.toISOString().slice(0,16)};
+export const safeNum = (v,label) => {const n=Number(v);if(!Number.isFinite(n)||n<0)throw new Error(`${label} must be a valid non-negative number.`);return n};
