@@ -1,10 +1,206 @@
-import {fetch24h,subscribe} from './binance-api.js';import {$,$$,money,pct,escapeHTML,toast} from './utils.js';
+import {fetch24h,fetchPrice,subscribe} from './binance-api.js';
+import {$,$$,money,pct,escapeHTML,toast} from './utils.js';
+
 let tickers=[],stopSocket=null,price=0,watch=new Set(JSON.parse(localStorage.getItem('crypto-watchlist')||'[]'));
+
 const fmt=n=>Number(n).toLocaleString('en-US',{maximumFractionDigits:8});
-export async function initMarket(onBTC){try{tickers=(await fetch24h()).filter(t=>t.symbol.endsWith('USDT')&&Number(t.count)>0);renderMarket();renderLeaders();const symbols=['btcusdt','ethusdt','bnbusdt','solusdt','xrpusdt','adausdt','dogeusdt','ltcusdt'];stopSocket?.();stopSocket=subscribe(symbols,d=>{const t=tickers.find(x=>x.symbol===d.s);if(t)Object.assign(t,{lastPrice:d.c,priceChangePercent:d.P,highPrice:d.h,lowPrice:d.l,quoteVolume:d.q});if(d.s==='BTCUSDT'){price=Number(d.c);onBTC?.(price,d);renderHero(d)}renderMarket();renderLeaders();},online=>{$('#connection-dot').parentElement.classList.toggle('online',online);$('#connection-text').textContent=online?'Market stream connected':'Reconnecting market stream';});const btc=tickers.find(t=>t.symbol==='BTCUSDT');if(btc){price=Number(btc.lastPrice);onBTC?.(price,btc);renderHero(btc)}$('#market-count').textContent=`${tickers.length} PAIRS`;return price;}catch(e){$('#connection-text').textContent='Market API unavailable';toast('Market data unavailable. Your local ledger remains accessible.');return price;}}
-function renderHero(t){$('#hero-btc').textContent=money(t.lastPrice);$('#hero-change').textContent=`${pct(t.priceChangePercent)} · 24h`;$('#hero-change').className=`change ${Number(t.priceChangePercent)>=0?'positive':'negative'}`;$('#btc-range').textContent=`${fmt(t.highPrice)} / ${fmt(t.lowPrice)}`;$('#btc-volume').textContent=money(t.quoteVolume)}
-function renderLeaders(){const top=[...tickers].sort((a,b)=>Number(b.priceChangePercent)-Number(a.priceChangePercent)).slice(0,4);$('#leaders').innerHTML=top.map(t=>`<div class="leader-row"><div class="asset-name"><span class="coin-icon">${escapeHTML(t.symbol.slice(0,-4).slice(0,1))}</span><div><strong>${escapeHTML(t.symbol.slice(0,-4))}</strong><small>${escapeHTML(t.symbol)}</small></div></div><div class="mono">${money(t.lastPrice)} <span class="${Number(t.priceChangePercent)>=0?'positive':'negative'}">${pct(t.priceChangePercent)}</span></div></div>`).join('')||'<div class="empty-state">No market data</div>'}
-function renderMarket(){const q=($('#market-search')?.value||'').toUpperCase().trim(),key=$('#market-sort')?.value||'quoteVolume',dir=$('#market-direction')?.value==='asc'?1:-1;const rows=tickers.filter(t=>!q||t.symbol.includes(q)||t.symbol.slice(0,-4).includes(q)).sort((a,b)=>key==='symbol'?a.symbol.localeCompare(b.symbol)*dir:(Number(a[key])-Number(b[key]))*dir);$('#market-body').innerHTML=rows.map(t=>`<tr><td><strong>${escapeHTML(t.symbol.slice(0,-4))}</strong><small style="color:var(--muted)"> / USDT</small></td><td class="mono">${fmt(t.lastPrice)}</td><td class="${Number(t.priceChangePercent)>=0?'positive':'negative'} mono">${pct(t.priceChangePercent)}</td><td class="mono">${fmt(t.highPrice)}</td><td class="mono">${fmt(t.lowPrice)}</td><td class="mono">${money(t.quoteVolume)}</td><td><button class="mini-btn" data-coin="${escapeHTML(t.symbol)}">Details</button> <button class="mini-btn" data-watch="${escapeHTML(t.symbol)}">${watch.has(t.symbol)?'★':'☆'}</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty-state">No matching pairs</td></tr>'}
-export function marketPrice(){return price}
-export function setupMarketEvents(openCoin){['market-search','market-sort','market-direction'].forEach(id=>$('#'+id).addEventListener(id==='market-search'?'input':'change',renderMarket));$('#market-body').addEventListener('click',e=>{const c=e.target.dataset.coin,w=e.target.dataset.watch;if(c)openCoin(tickers.find(t=>t.symbol===c));if(w){watch.has(w)?watch.delete(w):watch.add(w);localStorage.setItem('crypto-watchlist',JSON.stringify([...watch]));renderMarket()}})}
-export function getTicker(symbol){return tickers.find(t=>t.symbol===symbol)}
+
+export async function initMarket(onBTC){
+  try{
+    tickers=(await fetch24h()).filter(t=>t.symbol.endsWith('USDT')&&Number(t.count)>0);
+
+    renderMarket();
+    renderLeaders();
+
+    const symbols=['btcusdt','ethusdt','bnbusdt','solusdt','xrpusdt','adausdt','dogeusdt','ltcusdt'];
+
+    stopSocket?.();
+
+    stopSocket=subscribe(symbols,d=>{
+      const t=tickers.find(x=>x.symbol===d.s);
+
+      if(t){
+        Object.assign(t,{
+          lastPrice:d.c,
+          priceChangePercent:d.P,
+          highPrice:d.h,
+          lowPrice:d.l,
+          quoteVolume:d.q
+        });
+      }
+
+      if(d.s==='BTCUSDT'&&Number.isFinite(Number(d.c))&&Number(d.c)>0){
+        price=Number(d.c);
+        onBTC?.(price,d);
+        renderHero(d);
+      }
+
+      renderMarket();
+      renderLeaders();
+
+    },online=>{
+      $('#connection-dot').parentElement.classList.toggle('online',online);
+      $('#connection-text').textContent=online?'Market stream connected':'Reconnecting market stream';
+    });
+
+    let btc=tickers.find(t=>t.symbol==='BTCUSDT');
+
+    if(!btc||!(Number(btc.lastPrice)>0)){
+      const fresh=await fetchPrice('BTCUSDT');
+
+      if(Number(fresh.price)>0){
+        price=Number(fresh.price);
+
+        btc={
+          symbol:'BTCUSDT',
+          lastPrice:fresh.price,
+          priceChangePercent:0,
+          highPrice:0,
+          lowPrice:0,
+          quoteVolume:0
+        };
+      }
+
+    }else{
+      price=Number(btc.lastPrice);
+    }
+
+    if(price>0){
+      onBTC?.(price,btc);
+      renderHero(btc);
+    }
+
+    setInterval(async()=>{
+      try{
+        const fresh=await fetchPrice('BTCUSDT');
+
+        if(Number(fresh.price)>0){
+          price=Number(fresh.price);
+
+          const t=tickers.find(x=>x.symbol==='BTCUSDT');
+
+          if(t)t.lastPrice=fresh.price;
+
+          onBTC?.(
+            price,
+            t||{
+              lastPrice:fresh.price,
+              priceChangePercent:0,
+              highPrice:0,
+              lowPrice:0,
+              quoteVolume:0
+            }
+          );
+
+          if(t)renderHero(t);
+        }
+      }catch{}
+    },15000);
+
+    $('#market-count').textContent=`${tickers.length} PAIRS`;
+
+    return price;
+
+  }catch(e){
+    $('#connection-text').textContent='Market API unavailable';
+    toast('Market data unavailable. Your local ledger remains accessible.');
+    return price;
+  }
+}
+
+function renderHero(t){
+  $('#hero-btc').textContent=money(t.lastPrice);
+  $('#hero-change').textContent=`${pct(t.priceChangePercent)} · 24h`;
+  $('#hero-change').className=`change ${Number(t.priceChangePercent)>=0?'positive':'negative'}`;
+  $('#btc-range').textContent=`${fmt(t.highPrice)} / ${fmt(t.lowPrice)}`;
+  $('#btc-volume').textContent=money(t.quoteVolume);
+}
+
+function renderLeaders(){
+  const top=[...tickers]
+    .sort((a,b)=>Number(b.priceChangePercent)-Number(a.priceChangePercent))
+    .slice(0,4);
+
+  $('#leaders').innerHTML=top.map(t=>`
+    <div class="leader-row">
+      <div class="asset-name">
+        <span class="coin-icon">${escapeHTML(t.symbol.slice(0,-4).slice(0,1))}</span>
+        <div>
+          <strong>${escapeHTML(t.symbol.slice(0,-4))}</strong>
+          <small>${escapeHTML(t.symbol)}</small>
+        </div>
+      </div>
+      <div class="mono">
+        ${money(t.lastPrice)}
+        <span class="${Number(t.priceChangePercent)>=0?'positive':'negative'}">
+          ${pct(t.priceChangePercent)}
+        </span>
+      </div>
+    </div>
+  `).join('')||'<div class="empty-state">No market data</div>';
+}
+
+function renderMarket(){
+  const q=($('#market-search')?.value||'').toUpperCase().trim();
+  const key=$('#market-sort')?.value||'quoteVolume';
+  const dir=$('#market-direction')?.value==='asc'?1:-1;
+
+  const rows=tickers
+    .filter(t=>!q||t.symbol.includes(q)||t.symbol.slice(0,-4).includes(q))
+    .sort((a,b)=>key==='symbol'
+      ?a.symbol.localeCompare(b.symbol)*dir
+      :(Number(a[key])-Number(b[key]))*dir
+    );
+
+  $('#market-body').innerHTML=rows.map(t=>`
+    <tr>
+      <td>
+        <strong>${escapeHTML(t.symbol.slice(0,-4))}</strong>
+        <small style="color:var(--muted)"> / USDT</small>
+      </td>
+      <td class="mono">${fmt(t.lastPrice)}</td>
+      <td class="${Number(t.priceChangePercent)>=0?'positive':'negative'} mono">
+        ${pct(t.priceChangePercent)}
+      </td>
+      <td class="mono">${fmt(t.highPrice)}</td>
+      <td class="mono">${fmt(t.lowPrice)}</td>
+      <td class="mono">${money(t.quoteVolume)}</td>
+      <td>
+        <button class="mini-btn" data-coin="${escapeHTML(t.symbol)}">Details</button>
+        <button class="mini-btn" data-watch="${escapeHTML(t.symbol)}">
+          ${watch.has(t.symbol)?'★':'☆'}
+        </button>
+      </td>
+    </tr>
+  `).join('')||'<tr><td colspan="7" class="empty-state">No matching pairs</td></tr>';
+}
+
+export function marketPrice(){
+  return Number.isFinite(price)&&price>0?price:0;
+}
+
+export function setupMarketEvents(openCoin){
+  ['market-search','market-sort','market-direction'].forEach(id=>{
+    $('#'+id).addEventListener(
+      id==='market-search'?'input':'change',
+      renderMarket
+    );
+  });
+
+  $('#market-body').addEventListener('click',e=>{
+    const c=e.target.dataset.coin;
+    const w=e.target.dataset.watch;
+
+    if(c)openCoin(tickers.find(t=>t.symbol===c));
+
+    if(w){
+      watch.has(w)?watch.delete(w):watch.add(w);
+      localStorage.setItem('crypto-watchlist',JSON.stringify([...watch]));
+      renderMarket();
+    }
+  });
+}
+
+export function getTicker(symbol){
+  return tickers.find(t=>t.symbol===symbol);
+}
