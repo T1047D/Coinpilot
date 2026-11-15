@@ -6,37 +6,632 @@ import {portfolio} from './js/portfolio.js';
 import {analytics} from './js/analytics.js';
 import {saveJournal,deleteJournal,listJournal} from './js/journal.js';
 import {exportBackup,restoreBackup,csvFromTransactions} from './js/backup.js';
-let currentView='overview';
-function navigate(view){currentView=view;$$('.view').forEach(v=>v.classList.toggle('active',v.id===`view-${view}`));$$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===view));$('#page-title').textContent={overview:'Overview',markets:'Market Explorer',transactions:'Transactions',analytics:'Investment Analytics',goals:'BTC Accumulation Goals',journal:'Investment Journal',data:'Backup & Data'}[view];$('.sidebar').classList.remove('open');if(view==='analytics')renderAnalytics();if(view==='goals')renderGoals();if(view==='journal')renderJournal();if(view==='transactions')renderTransactions();}
-$$('#nav .nav-item').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.view)));$$('[data-goto]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.goto)));$('#menu-toggle').addEventListener('click',()=>$('.sidebar').classList.toggle('open'));
-setInterval(()=>$('#clock').textContent=new Date().toLocaleTimeString(),1000);
-function signed(n){return `${n>=0?'+':''}${money(n)}`}
-async function renderDashboard(price=marketPrice()){const {metrics:m,transactions}=await portfolio(price);$('#m-holdings').textContent=btc(m.holdings);$('#m-holdings-sub').textContent=`${btc(m.bought)} bought · ${btc(m.sold)} sold`;$('#m-invested').textContent=money(m.remainingCostBasis);$('#m-value').textContent=money(m.portfolioValue);$('#m-unrealized').textContent=signed(m.unrealizedPNL);$('#m-unrealized').className=m.unrealizedPNL>=0?'positive':'negative';$('#m-unrealized-sub').textContent=`${money(m.remainingCostBasis)} cost basis`;$ ('#m-realized').textContent=signed(m.realizedPNL);$('#m-realized').className=m.realizedPNL>=0?'positive':'negative';$('#m-roi').textContent=pct(m.roi);$('#m-roi').className=m.roi>=0?'positive':'negative';$('#breakdown-value').textContent=money(m.portfolioValue);$('#breakdown-qty').textContent=`${btc(m.holdings)} BTC`;$('#portfolio-donut').style.background=m.holdings?'conic-gradient(var(--blue) 0 100%,#27344b 0)':'#27344b';const recent=transactions.sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,5);$('#recent-activity').innerHTML=recent.map(t=>`<div class="activity-row"><div><strong>${t.type} BTC</strong><small>${dateTime(t.date)} · ${escapeHTML(t.exchange||'—')}</small></div><div class="mono ${t.type==='BUY'?'positive':'negative'}">${t.type==='BUY'?'+':'−'}${btc(t.quantity)}</div></div>`).join('')||'<div class="empty-state">No transactions recorded yet.</div>';if(currentView==='transactions')renderTransactions();}
-async function renderTransactions(){const rows=(await all('transactions')).sort((a,b)=>new Date(b.date)-new Date(a.date));const q=($('#tx-search').value||'').toLowerCase(),f=$('#tx-filter').value;const filtered=rows.filter(t=>(f==='all'||t.type===f)&&[t.exchange,t.reference,t.notes,t.type].join(' ').toLowerCase().includes(q));$('#transaction-body').innerHTML=filtered.map(t=>`<tr><td>${dateTime(t.date)}</td><td><span class="type-pill ${t.type==='BUY'?'type-buy':'type-sell'}">${t.type}</span></td><td class="mono">${btc(t.quantity)}</td><td class="mono">${money(t.price)}</td><td class="mono">${money(t.fee)}</td><td>${escapeHTML(t.exchange||'—')}</td><td class="mono">${money((t.type==='BUY'?-1:1)*t.quantity*t.price+(t.type==='BUY'?-1:1)*(t.type==='BUY'?t.fee:-t.fee))}</td><td><div class="row-actions"><button class="mini-btn" data-edit="${t.id}">Edit</button><button class="mini-btn delete" data-delete="${t.id}">Delete</button></div></td></tr>`).join('')||'<tr><td colspan="8" class="empty-state">No matching transactions.</td></tr>';const m=(await portfolio(marketPrice())).metrics;$('#tx-bought').textContent=btc(m.bought);$('#tx-sold').textContent=btc(m.sold);$('#tx-fees').textContent=money(m.fees);$('#tx-count').textContent=rows.length;}
-function openTx(t){$('#transaction-form').reset();$('#tx-form-error').textContent='';$('#tx-id').value=t?.id||'';$('#transaction-modal-title').textContent=t?'Edit transaction':'Add transaction';$('#tx-type').value=t?.type||'BUY';$('#tx-date').value=t?new Date(new Date(t.date).getTime()-new Date(t.date).getTimezoneOffset()*60000).toISOString().slice(0,16):dateInputNow();$('#tx-qty').value=t?.quantity??'';$('#tx-price').value=t?.price??'';$('#tx-fee').value=t?.fee??0;$('#tx-exchange').value=t?.exchange||'';$('#tx-reference').value=t?.reference||'';$('#tx-notes').value=t?.notes||'';$('#transaction-dialog').showModal();}
-$('#add-transaction').onclick=()=>openTx();$('#transaction-form').onsubmit=async e=>{e.preventDefault();try{const old=$('#tx-id').value;const item={id:old||undefined,type:$('#tx-type').value,date:new Date($('#tx-date').value).toISOString(),quantity:safeNum($('#tx-qty').value,'Quantity'),price:safeNum($('#tx-price').value,'Price'),fee:safeNum($('#tx-fee').value,'Fee'),exchange:$('#tx-exchange').value.trim(),reference:$('#tx-reference').value.trim(),notes:$('#tx-notes').value.trim()};if(!item.quantity||!item.price)throw new Error('Quantity and price must be greater than zero.');await saveTransaction(item);$('#transaction-dialog').close();toast('Transaction saved.');await refreshAll();}catch(e){$('#tx-form-error').textContent=e.message;}};
-$('#transaction-body').addEventListener('click',async e=>{const id=e.target.dataset.edit||e.target.dataset.delete;if(!id)return;if(e.target.dataset.edit){openTx(await (await import('./js/database.js')).get('transactions',id));}else if(confirm('Delete this transaction? This changes your FIFO accounting. Consider exporting a backup first.')){await deleteTransaction(id);toast('Transaction deleted.');await refreshAll();}});
-$('#tx-search').addEventListener('input',renderTransactions);$('#tx-filter').addEventListener('change',renderTransactions);
-function exportCSV(){all('transactions').then(rows=>download('crypto-desk-transactions.csv',csvFromTransactions(rows),'text/csv;charset=utf-8;'))}$('#export-csv').onclick=exportCSV;$('#export-csv-2').onclick=exportCSV;
-function drawBars(el,items){if(!items.length){el.innerHTML='<div class="empty-state">Not enough recorded history yet.</div>';return;}const max=Math.max(...items.map(x=>x.value),.0000001);el.innerHTML=items.slice(-18).map(x=>`<div class="bar-col"><em>${typeof x.value==='number'&&x.value<1?x.value.toFixed(4):money(x.value)}</em><div class="bar" style="height:${Math.max(2,x.value/max*125)}px"></div><small>${escapeHTML(x.label)}</small></div>`).join('');}
-async function renderAnalytics(){const a=await analytics(marketPrice()),range=$('#analytics-range').value,cut=range==='all'?0:Date.now()-({'1m':30,'3m':90,'6m':180,'1y':365,'5y':1825}[range])*86400000;const monthly=a.monthly.filter(x=>{const [y,m]=x.label.split('-');return new Date(Number(y),Number(m)-1).getTime()>=cut});drawBars($('#monthly-chart'),monthly);drawBars($('#accumulation-chart'),a.balance.filter(x=>new Date(x.date).getTime()>=cut).map((x,i)=>({label:new Date(x.date).toLocaleDateString(undefined,{month:'short',year:'2-digit'}),value:x.btc})));const m=a.metrics;$('#pnl-chart').innerHTML=[['Realized',m.realizedPNL],['Unrealized',m.unrealizedPNL]].map(([k,v])=>`<div class="pnl-line"><span>${k}</span><div class="pnl-track"><div class="pnl-fill" style="width:${Math.min(100,Math.abs(v)/(Math.max(Math.abs(m.realizedPNL),Math.abs(m.unrealizedPNL),1))*100)}%;background:${v>=0?'var(--green)':'var(--red)'}"></div></div><strong class="${v>=0?'positive':'negative'}">${signed(v)}</strong></div>`).join('');const stats=[['Average buy price',money(m.averageBuyPrice)],['Total transaction fees',money(m.fees)],['Total PNL',signed(m.totalPNL)],['ROI',pct(m.roi)],['Net contributed capital',money(m.netContributed)],['Recorded transactions',a.transactions.length]];$('#analytics-stats').innerHTML=stats.map(([k,v])=>`<div class="stats-row"><span>${k}</span><strong>${v}</strong></div>`).join('');$('#timeline').innerHTML=a.transactions.map(t=>`<div class="timeline-item"><strong class="${t.type==='BUY'?'positive':'negative'}">${t.type} ${btc(t.quantity)} BTC</strong><small>${new Date(t.date).toLocaleDateString()} · ${money(t.price)}</small></div>`).join('')||'<div class="empty-state">Your investment timeline will appear here.</div>';}
-$('#analytics-range').onchange=renderAnalytics;
-async function renderGoals(){const goals=await all('goals'),m=(await portfolio(marketPrice())).metrics;$('#goals-list').innerHTML=goals.map(g=>{const p=Math.min(100,m.holdings/g.target*100);return `<article class="goal-card"><div class="goal-top"><div><h3>${escapeHTML(g.name)}</h3><p>BTC accumulation target</p></div><div class="row-actions"><button class="mini-btn" data-goal-edit="${g.id}">Edit</button><button class="mini-btn delete" data-goal-del="${g.id}">Delete</button></div></div><div class="goal-numbers"><strong>${btc(m.holdings)} <span>BTC</span></strong><span>${btc(g.target)} BTC target</span></div><div class="progress"><span style="width:${p}%"></span></div><div class="goal-foot"><span>${p.toFixed(1)}% complete</span><span>${btc(Math.max(0,g.target-m.holdings))} BTC remaining</span></div></article>`}).join('')||'<div class="panel empty-state">No goals yet. Create a milestone to track your accumulation.</div>';}
-$('#add-goal').onclick=()=>{ $('#goal-form').reset();$('#goal-id').value='';$('#goal-modal-title').textContent='Add BTC goal';$('#goal-dialog').showModal();};
-$('#goal-form').onsubmit=async e=>{e.preventDefault();try{const id=$('#goal-id').value||crypto.randomUUID();await put('goals',{id,name:$('#goal-name').value.trim(),target:safeNum($('#goal-target').value,'Target'),updatedAt:Date.now()});$('#goal-dialog').close();renderGoals();toast('Goal saved.');}catch(e){toast(e.message)}};
-$('#goals-list').addEventListener('click',async e=>{const id=e.target.dataset.goalEdit||e.target.dataset.goalDel;if(!id)return;const g=(await all('goals')).find(x=>x.id===id);if(e.target.dataset.goalEdit){$('#goal-id').value=id;$('#goal-name').value=g.name;$('#goal-target').value=g.target;$('#goal-modal-title').textContent='Edit BTC goal';$('#goal-dialog').showModal();}else if(confirm('Delete this goal?')){await remove('goals',id);renderGoals();}});
-async function renderJournal(){const rows=(await listJournal()).sort((a,b)=>new Date(b.date)-new Date(a.date));$('#journal-list').innerHTML=rows.map(j=>`<article class="journal-card"><div class="journal-top"><div><span class="tag">${escapeHTML(j.type)}</span><h3 style="margin-top:10px">${escapeHTML(j.title)}</h3></div><div class="row-actions"><button class="mini-btn" data-jedit="${j.id}">Edit</button><button class="mini-btn delete" data-jdel="${j.id}">Delete</button></div></div><p>${escapeHTML(j.content)}</p><div class="journal-meta">${new Date(j.date).toLocaleDateString()}${j.transactionId?' · Linked transaction':''}</div></article>`).join('')||'<div class="panel empty-state">No journal entries yet. Record your investment thesis and lessons.</div>';}
-$('#add-journal').onclick=async()=>{const rows=await all('transactions');$('#journal-form').reset();$('#journal-id').value='';$('#journal-date').value=new Date().toISOString().slice(0,10);$('#journal-transaction').innerHTML='<option value="">None</option>'+rows.map(t=>`<option value="${t.id}">${t.type} ${btc(t.quantity)} BTC · ${new Date(t.date).toLocaleDateString()}</option>`).join('');$('#journal-modal-title').textContent='New journal entry';$('#journal-dialog').showModal();};
-$('#journal-form').onsubmit=async e=>{e.preventDefault();await saveJournal({id:$('#journal-id').value||undefined,date:$('#journal-date').value,title:$('#journal-title').value.trim(),type:$('#journal-type').value,transactionId:$('#journal-transaction').value,content:$('#journal-content').value.trim()});$('#journal-dialog').close();renderJournal();toast('Journal entry saved.');};
-$('#journal-list').addEventListener('click',async e=>{const id=e.target.dataset.jedit||e.target.dataset.jdel;if(!id)return;const j=(await listJournal()).find(x=>x.id===id);if(e.target.dataset.jdel){if(confirm('Delete this journal entry?')){await deleteJournal(id);renderJournal();}}else{const rows=await all('transactions');$('#journal-id').value=id;$('#journal-date').value=j.date;$('#journal-title').value=j.title;$('#journal-type').value=j.type;$('#journal-content').value=j.content;$('#journal-transaction').innerHTML='<option value="">None</option>'+rows.map(t=>`<option value="${t.id}">${t.type} ${btc(t.quantity)} BTC · ${new Date(t.date).toLocaleDateString()}</option>`).join('');$('#journal-transaction').value=j.transactionId||'';$('#journal-modal-title').textContent='Edit journal entry';$('#journal-dialog').showModal();}});
-$('#backup-json').onclick=async()=>{const b=await exportBackup();download(`crypto-desk-backup-${new Date().toISOString().slice(0,10)}.json`,JSON.stringify(b,null,2));localStorage.setItem('crypto-last-backup',b.exportedAt);$('#backup-status').textContent=`Last backup exported: ${new Date(b.exportedAt).toLocaleString()}`;toast('Backup downloaded. Store a copy safely.');};
-$('#restore-file').onchange=async e=>{const f=e.target.files[0];if(!f)return;try{const obj=JSON.parse(await f.text());if(!confirm('This will replace all current Crypto Desk records. Export your current data first. Continue?'))return;await restoreBackup(obj);toast('Backup restored successfully.');await refreshAll();}catch(err){alert(`Restore failed: ${err.message}`)}finally{e.target.value='';}};
-$('#clear-data').onclick=async()=>{if(confirm('Permanently clear ALL transactions, goals, journal entries, settings and audit history on this browser? This cannot be undone.')){if(prompt('Type DELETE to confirm')==='DELETE'){await clearAll();toast('Local records cleared.');await refreshAll();}}};
-function openCoin(t){if(!t)return;$('#coin-title').textContent=t.symbol;$('#coin-content').innerHTML=`<div class="metric-grid compact"><article class="metric"><span>Last price</span><strong>${money(t.lastPrice)}</strong></article><article class="metric"><span>24h change</span><strong class="${Number(t.priceChangePercent)>=0?'positive':'negative'}">${pct(t.priceChangePercent)}</strong></article><article class="metric"><span>24h high</span><strong>${money(t.highPrice)}</strong></article><article class="metric"><span>24h low</span><strong>${money(t.lowPrice)}</strong></article></div>`;$('#coin-tv').innerHTML='<div id="coin-tv-widget" style="height:300px"></div>';$('#coin-dialog').showModal();const render=()=>{if(window.TradingView)new TradingView.widget({autosize:true,symbol:`BINANCE:${t.symbol}`,interval:'D',timezone:'Etc/UTC',theme:'dark',style:'1',locale:'en',toolbar_bg:'#111a2b',enable_publishing:false,hide_top_toolbar:false,container_id:'coin-tv-widget'});};if(window.TradingView)render();else setTimeout(render,800);}
-$$('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.dataset.close).close());
-async function refreshAll(){await renderDashboard();if(currentView==='goals')await renderGoals();if(currentView==='analytics')await renderAnalytics();if(currentView==='journal')await renderJournal();if(currentView==='transactions')await renderTransactions();}
-async function init(){try{await openDB();$('#db-status').textContent='IndexedDB ready · records stored locally in this browser';$('#backup-status').textContent=localStorage.getItem('crypto-last-backup')?`Last backup exported: ${new Date(localStorage.getItem('crypto-last-backup')).toLocaleString()}`:'Last backup: not recorded';}catch(e){$('#db-status').textContent='IndexedDB unavailable: '+e.message;toast('Local database unavailable. Try a supported modern browser.');}
- setupMarketEvents(openCoin);$('#market-body').addEventListener('click',()=>{});window.addEventListener('online',()=>toast('Connection restored.'));window.addEventListener('offline',()=>toast('You are offline. Market prices may be stale; local records remain available.'));
- await initMarket(p=>renderDashboard(p));await refreshAll();if(window.TradingView)new TradingView.widget({autosize:true,symbol:'BINANCE:BTCUSDT',interval:'D',timezone:'Etc/UTC',theme:'dark',style:'1',locale:'en',toolbar_bg:'#111a2b',enable_publishing:false,hide_top_toolbar:false,container_id:'tradingview-chart'});else $('#tradingview-chart').innerHTML='<div class="empty-state">TradingView chart is unavailable. Market and ledger features remain usable.</div>';
+
+let currentView='overview',dashboardRenderVersion=0;
+
+function navigate(view){
+  currentView=view;
+
+  $$('.view').forEach(v=>v.classList.toggle('active',v.id===`view-${view}`));
+  $$('.nav-item').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
+
+  $('#page-title').textContent={
+    overview:'Overview',
+    markets:'Market Explorer',
+    transactions:'Transactions',
+    analytics:'Investment Analytics',
+    goals:'BTC Accumulation Goals',
+    journal:'Investment Journal',
+    data:'Backup & Data'
+  }[view];
+
+  $('.sidebar').classList.remove('open');
+
+  if(view==='analytics')renderAnalytics();
+  if(view==='goals')renderGoals();
+  if(view==='journal')renderJournal();
+  if(view==='transactions')renderTransactions();
 }
+
+$$('#nav .nav-item').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.view)));
+$$('[data-goto]').forEach(b=>b.addEventListener('click',()=>navigate(b.dataset.goto)));
+$('#menu-toggle').addEventListener('click',()=>$('.sidebar').classList.toggle('open'));
+
+setInterval(()=>$('#clock').textContent=new Date().toLocaleTimeString(),1000);
+
+function signed(n){
+  return `${n>=0?'+':''}${money(n)}`;
+}
+
+async function renderDashboard(price=marketPrice()){
+  const version=++dashboardRenderVersion;
+
+  const {metrics:m,transactions}=await portfolio(price);
+
+  if(version!==dashboardRenderVersion)return;
+
+  $('#m-holdings').textContent=btc(m.holdings);
+  $('#m-holdings-sub').textContent=`${btc(m.bought)} bought · ${btc(m.sold)} sold`;
+
+  $('#m-invested').textContent=money(m.remainingCostBasis);
+
+  $('#m-value').textContent=price>0?money(m.portfolioValue):'—';
+
+  $('#m-unrealized').textContent=signed(m.unrealizedPNL);
+  $('#m-unrealized').className=m.unrealizedPNL>=0?'positive':'negative';
+
+  $('#m-unrealized-sub').textContent=`${money(m.remainingCostBasis)} cost basis`;
+
+  $('#m-realized').textContent=signed(m.realizedPNL);
+  $('#m-realized').className=m.realizedPNL>=0?'positive':'negative';
+
+  $('#m-roi').textContent=pct(m.roi);
+  $('#m-roi').className=m.roi>=0?'positive':'negative';
+
+  $('#breakdown-value').textContent=price>0?money(m.portfolioValue):'—';
+  $('#breakdown-qty').textContent=`${btc(m.holdings)} BTC`;
+
+  $('#portfolio-donut').style.background=m.holdings
+    ?'conic-gradient(var(--blue) 0 100%,#27344b 0)'
+    :'#27344b';
+
+  const recent=transactions
+    .sort((a,b)=>new Date(b.date)-new Date(a.date))
+    .slice(0,5);
+
+  $('#recent-activity').innerHTML=recent.map(t=>`
+    <div class="activity-row">
+      <div>
+        <strong>${t.type} BTC</strong>
+        <small>${dateTime(t.date)} · ${escapeHTML(t.exchange||'—')}</small>
+      </div>
+      <div class="mono ${t.type==='BUY'?'positive':'negative'}">
+        ${t.type==='BUY'?'+':'−'}${btc(t.quantity)}
+      </div>
+    </div>
+  `).join('')||'<div class="empty-state">No transactions recorded yet.</div>';
+
+  if(currentView==='transactions')renderTransactions();
+}
+
+async function renderTransactions(){
+  const rows=(await all('transactions'))
+    .sort((a,b)=>new Date(b.date)-new Date(a.date));
+
+  const q=($('#tx-search').value||'').toLowerCase();
+  const f=$('#tx-filter').value;
+
+  const filtered=rows.filter(t=>
+    (f==='all'||t.type===f)&&
+    [t.exchange,t.reference,t.notes,t.type].join(' ').toLowerCase().includes(q)
+  );
+
+  $('#transaction-body').innerHTML=filtered.map(t=>`
+    <tr>
+      <td>${dateTime(t.date)}</td>
+      <td><span class="type-pill ${t.type==='BUY'?'type-buy':'type-sell'}">${t.type}</span></td>
+      <td class="mono">${btc(t.quantity)}</td>
+      <td class="mono">${money(t.price)}</td>
+      <td class="mono">${money(t.fee)}</td>
+      <td>${escapeHTML(t.exchange||'—')}</td>
+      <td class="mono">${money((t.type==='BUY'?-1:1)*t.quantity*t.price+(t.type==='BUY'?-1:1)*(t.type==='BUY'?t.fee:-t.fee))}</td>
+      <td>
+        <div class="row-actions">
+          <button class="mini-btn" data-edit="${t.id}">Edit</button>
+          <button class="mini-btn delete" data-delete="${t.id}">Delete</button>
+        </div>
+      </td>
+    </tr>
+  `).join('')||'<tr><td colspan="8" class="empty-state">No matching transactions.</td></tr>';
+
+  const m=(await portfolio(marketPrice())).metrics;
+
+  $('#tx-bought').textContent=btc(m.bought);
+  $('#tx-sold').textContent=btc(m.sold);
+  $('#tx-fees').textContent=money(m.fees);
+  $('#tx-count').textContent=rows.length;
+}
+
+function openTx(t){
+  $('#transaction-form').reset();
+  $('#tx-form-error').textContent='';
+
+  $('#tx-id').value=t?.id||'';
+  $('#transaction-modal-title').textContent=t?'Edit transaction':'Add transaction';
+  $('#tx-type').value=t?.type||'BUY';
+
+  $('#tx-date').value=t
+    ?new Date(new Date(t.date).getTime()-new Date(t.date).getTimezoneOffset()*60000).toISOString().slice(0,16)
+    :dateInputNow();
+
+  $('#tx-qty').value=t?.quantity??'';
+  $('#tx-price').value=t?.price??'';
+  $('#tx-fee').value=t?.fee??0;
+  $('#tx-exchange').value=t?.exchange||'';
+  $('#tx-reference').value=t?.reference||'';
+  $('#tx-notes').value=t?.notes||'';
+
+  $('#transaction-dialog').showModal();
+}
+
+$('#add-transaction').onclick=()=>openTx();
+
+$('#transaction-form').onsubmit=async e=>{
+  e.preventDefault();
+
+  try{
+    const old=$('#tx-id').value;
+
+    const item={
+      id:old||undefined,
+      type:$('#tx-type').value,
+      date:new Date($('#tx-date').value).toISOString(),
+      quantity:safeNum($('#tx-qty').value,'Quantity'),
+      price:safeNum($('#tx-price').value,'Price'),
+      fee:safeNum($('#tx-fee').value,'Fee'),
+      exchange:$('#tx-exchange').value.trim(),
+      reference:$('#tx-reference').value.trim(),
+      notes:$('#tx-notes').value.trim()
+    };
+
+    if(!item.quantity||!item.price){
+      throw new Error('Quantity and price must be greater than zero.');
+    }
+
+    await saveTransaction(item);
+
+    $('#transaction-dialog').close();
+    toast('Transaction saved.');
+
+    await refreshAll();
+
+  }catch(e){
+    $('#tx-form-error').textContent=e.message;
+  }
+};
+
+$('#transaction-body').addEventListener('click',async e=>{
+  const id=e.target.dataset.edit||e.target.dataset.delete;
+
+  if(!id)return;
+
+  if(e.target.dataset.edit){
+    openTx(await (await import('./js/database.js')).get('transactions',id));
+
+  }else if(confirm('Delete this transaction? This changes your FIFO accounting. Consider exporting a backup first.')){
+    await deleteTransaction(id);
+    toast('Transaction deleted.');
+    await refreshAll();
+  }
+});
+
+$('#tx-search').addEventListener('input',renderTransactions);
+$('#tx-filter').addEventListener('change',renderTransactions);
+
+function exportCSV(){
+  all('transactions').then(rows=>
+    download('crypto-desk-transactions.csv',csvFromTransactions(rows),'text/csv;charset=utf-8;')
+  );
+}
+
+$('#export-csv').onclick=exportCSV;
+$('#export-csv-2').onclick=exportCSV;
+
+function drawBars(el,items){
+  if(!items.length){
+    el.innerHTML='<div class="empty-state">Not enough recorded history yet.</div>';
+    return;
+  }
+
+  const max=Math.max(...items.map(x=>x.value),.0000001);
+
+  el.innerHTML=items.slice(-18).map(x=>`
+    <div class="bar-col">
+      <em>${typeof x.value==='number'&&x.value<1?x.value.toFixed(4):money(x.value)}</em>
+      <div class="bar" style="height:${Math.max(2,x.value/max*125)}px"></div>
+      <small>${escapeHTML(x.label)}</small>
+    </div>
+  `).join('');
+}
+
+async function renderAnalytics(){
+  const a=await analytics(marketPrice());
+  const range=$('#analytics-range').value;
+
+  const cut=range==='all'
+    ?0
+    :Date.now()-({'1m':30,'3m':90,'6m':180,'1y':365,'5y':1825}[range])*86400000;
+
+  const monthly=a.monthly.filter(x=>{
+    const [y,m]=x.label.split('-');
+    return new Date(Number(y),Number(m)-1).getTime()>=cut;
+  });
+
+  drawBars($('#monthly-chart'),monthly);
+
+  drawBars(
+    $('#accumulation-chart'),
+    a.balance
+      .filter(x=>new Date(x.date).getTime()>=cut)
+      .map((x,i)=>({
+        label:new Date(x.date).toLocaleDateString(undefined,{month:'short',year:'2-digit'}),
+        value:x.btc
+      }))
+  );
+
+  const m=a.metrics;
+
+  $('#pnl-chart').innerHTML=[
+    ['Realized',m.realizedPNL],
+    ['Unrealized',m.unrealizedPNL]
+  ].map(([k,v])=>`
+    <div class="pnl-line">
+      <span>${k}</span>
+      <div class="pnl-track">
+        <div class="pnl-fill" style="width:${Math.min(100,Math.abs(v)/(Math.max(Math.abs(m.realizedPNL),Math.abs(m.unrealizedPNL),1))*100)}%;background:${v>=0?'var(--green)':'var(--red)'}"></div>
+      </div>
+      <strong class="${v>=0?'positive':'negative'}">${signed(v)}</strong>
+    </div>
+  `).join('');
+
+  const stats=[
+    ['Average buy price',money(m.averageBuyPrice)],
+    ['Total transaction fees',money(m.fees)],
+    ['Total PNL',signed(m.totalPNL)],
+    ['ROI',pct(m.roi)],
+    ['Net contributed capital',money(m.netContributed)],
+    ['Recorded transactions',a.transactions.length]
+  ];
+
+  $('#analytics-stats').innerHTML=stats.map(([k,v])=>`
+    <div class="stats-row">
+      <span>${k}</span>
+      <strong>${v}</strong>
+    </div>
+  `).join('');
+
+  $('#timeline').innerHTML=a.transactions.map(t=>`
+    <div class="timeline-item">
+      <strong class="${t.type==='BUY'?'positive':'negative'}">${t.type} ${btc(t.quantity)} BTC</strong>
+      <small>${new Date(t.date).toLocaleDateString()} · ${money(t.price)}</small>
+    </div>
+  `).join('')||'<div class="empty-state">Your investment timeline will appear here.</div>';
+}
+
+$('#analytics-range').onchange=renderAnalytics;
+
+async function renderGoals(){
+  const goals=await all('goals');
+  const m=(await portfolio(marketPrice())).metrics;
+
+  $('#goals-list').innerHTML=goals.map(g=>{
+    const p=Math.min(100,m.holdings/g.target*100);
+
+    return `
+      <article class="goal-card">
+        <div class="goal-top">
+          <div>
+            <h3>${escapeHTML(g.name)}</h3>
+            <p>BTC accumulation target</p>
+          </div>
+          <div class="row-actions">
+            <button class="mini-btn" data-goal-edit="${g.id}">Edit</button>
+            <button class="mini-btn delete" data-goal-del="${g.id}">Delete</button>
+          </div>
+        </div>
+        <div class="goal-numbers">
+          <strong>${btc(m.holdings)} <span>BTC</span></strong>
+          <span>${btc(g.target)} BTC target</span>
+        </div>
+        <div class="progress"><span style="width:${p}%"></span></div>
+        <div class="goal-foot">
+          <span>${p.toFixed(1)}% complete</span>
+          <span>${btc(Math.max(0,g.target-m.holdings))} BTC remaining</span>
+        </div>
+      </article>
+    `;
+  }).join('')||'<div class="panel empty-state">No goals yet. Create a milestone to track your accumulation.</div>';
+}
+
+$('#add-goal').onclick=()=>{
+  $('#goal-form').reset();
+  $('#goal-id').value='';
+  $('#goal-modal-title').textContent='Add BTC goal';
+  $('#goal-dialog').showModal();
+};
+
+$('#goal-form').onsubmit=async e=>{
+  e.preventDefault();
+
+  try{
+    const id=$('#goal-id').value||crypto.randomUUID();
+
+    await put('goals',{
+      id,
+      name:$('#goal-name').value.trim(),
+      target:safeNum($('#goal-target').value,'Target'),
+      updatedAt:Date.now()
+    });
+
+    $('#goal-dialog').close();
+    renderGoals();
+    toast('Goal saved.');
+
+  }catch(e){
+    toast(e.message);
+  }
+};
+
+$('#goals-list').addEventListener('click',async e=>{
+  const id=e.target.dataset.goalEdit||e.target.dataset.goalDel;
+
+  if(!id)return;
+
+  const g=(await all('goals')).find(x=>x.id===id);
+
+  if(e.target.dataset.goalEdit){
+    $('#goal-id').value=id;
+    $('#goal-name').value=g.name;
+    $('#goal-target').value=g.target;
+    $('#goal-modal-title').textContent='Edit BTC goal';
+    $('#goal-dialog').showModal();
+
+  }else if(confirm('Delete this goal?')){
+    await remove('goals',id);
+    renderGoals();
+  }
+});
+
+async function renderJournal(){
+  const rows=(await listJournal())
+    .sort((a,b)=>new Date(b.date)-new Date(a.date));
+
+  $('#journal-list').innerHTML=rows.map(j=>`
+    <article class="journal-card">
+      <div class="journal-top">
+        <div>
+          <span class="tag">${escapeHTML(j.type)}</span>
+          <h3 style="margin-top:10px">${escapeHTML(j.title)}</h3>
+        </div>
+        <div class="row-actions">
+          <button class="mini-btn" data-jedit="${j.id}">Edit</button>
+          <button class="mini-btn delete" data-jdel="${j.id}">Delete</button>
+        </div>
+      </div>
+      <p>${escapeHTML(j.content)}</p>
+      <div class="journal-meta">
+        ${new Date(j.date).toLocaleDateString()}${j.transactionId?' · Linked transaction':''}
+      </div>
+    </article>
+  `).join('')||'<div class="panel empty-state">No journal entries yet. Record your investment thesis and lessons.</div>';
+}
+
+$('#add-journal').onclick=async()=>{
+  const rows=await all('transactions');
+
+  $('#journal-form').reset();
+  $('#journal-id').value='';
+  $('#journal-date').value=new Date().toISOString().slice(0,10);
+
+  $('#journal-transaction').innerHTML='<option value="">None</option>'+
+    rows.map(t=>`
+      <option value="${t.id}">
+        ${t.type} ${btc(t.quantity)} BTC · ${new Date(t.date).toLocaleDateString()}
+      </option>
+    `).join('');
+
+  $('#journal-modal-title').textContent='New journal entry';
+  $('#journal-dialog').showModal();
+};
+
+$('#journal-form').onsubmit=async e=>{
+  e.preventDefault();
+
+  await saveJournal({
+    id:$('#journal-id').value||undefined,
+    date:$('#journal-date').value,
+    title:$('#journal-title').value.trim(),
+    type:$('#journal-type').value,
+    transactionId:$('#journal-transaction').value,
+    content:$('#journal-content').value.trim()
+  });
+
+  $('#journal-dialog').close();
+  renderJournal();
+  toast('Journal entry saved.');
+};
+
+$('#journal-list').addEventListener('click',async e=>{
+  const id=e.target.dataset.jedit||e.target.dataset.jdel;
+
+  if(!id)return;
+
+  const j=(await listJournal()).find(x=>x.id===id);
+
+  if(e.target.dataset.jdel){
+    if(confirm('Delete this journal entry?')){
+      await deleteJournal(id);
+      renderJournal();
+    }
+
+  }else{
+    const rows=await all('transactions');
+
+    $('#journal-id').value=id;
+    $('#journal-date').value=j.date;
+    $('#journal-title').value=j.title;
+    $('#journal-type').value=j.type;
+    $('#journal-content').value=j.content;
+
+    $('#journal-transaction').innerHTML='<option value="">None</option>'+
+      rows.map(t=>`
+        <option value="${t.id}">
+          ${t.type} ${btc(t.quantity)} BTC · ${new Date(t.date).toLocaleDateString()}
+        </option>
+      `).join('');
+
+    $('#journal-transaction').value=j.transactionId||'';
+    $('#journal-modal-title').textContent='Edit journal entry';
+    $('#journal-dialog').showModal();
+  }
+});
+
+$('#backup-json').onclick=async()=>{
+  const b=await exportBackup();
+
+  download(
+    `crypto-desk-backup-${new Date().toISOString().slice(0,10)}.json`,
+    JSON.stringify(b,null,2)
+  );
+
+  localStorage.setItem('crypto-last-backup',b.exportedAt);
+
+  $('#backup-status').textContent=`Last backup exported: ${new Date(b.exportedAt).toLocaleString()}`;
+
+  toast('Backup downloaded. Store a copy safely.');
+};
+
+$('#restore-file').onchange=async e=>{
+  const f=e.target.files[0];
+
+  if(!f)return;
+
+  try{
+    const obj=JSON.parse(await f.text());
+
+    if(!confirm('This will replace all current Crypto Desk records. Export your current data first. Continue?'))return;
+
+    await restoreBackup(obj);
+
+    toast('Backup restored successfully.');
+
+    await refreshAll();
+
+  }catch(err){
+    alert(`Restore failed: ${err.message}`);
+
+  }finally{
+    e.target.value='';
+  }
+};
+
+$('#clear-data').onclick=async()=>{
+  if(confirm('Permanently clear ALL transactions, goals, journal entries, settings and audit history on this browser? This cannot be undone.')){
+    if(prompt('Type DELETE to confirm')==='DELETE'){
+      await clearAll();
+      toast('Local records cleared.');
+      await refreshAll();
+    }
+  }
+};
+
+function openCoin(t){
+  if(!t)return;
+
+  $('#coin-title').textContent=t.symbol;
+
+  $('#coin-content').innerHTML=`
+    <div class="metric-grid compact">
+      <article class="metric">
+        <span>Last price</span>
+        <strong>${money(t.lastPrice)}</strong>
+      </article>
+      <article class="metric">
+        <span>24h change</span>
+        <strong class="${Number(t.priceChangePercent)>=0?'positive':'negative'}">${pct(t.priceChangePercent)}</strong>
+      </article>
+      <article class="metric">
+        <span>24h high</span>
+        <strong>${money(t.highPrice)}</strong>
+      </article>
+      <article class="metric">
+        <span>24h low</span>
+        <strong>${money(t.lowPrice)}</strong>
+      </article>
+    </div>
+  `;
+
+  $('#coin-tv').innerHTML='<div id="coin-tv-widget" style="height:300px"></div>';
+
+  $('#coin-dialog').showModal();
+
+  const render=()=>{
+    if(window.TradingView){
+      new TradingView.widget({
+        autosize:true,
+        symbol:`BINANCE:${t.symbol}`,
+        interval:'D',
+        timezone:'Etc/UTC',
+        theme:'dark',
+        style:'1',
+        locale:'en',
+        toolbar_bg:'#111a2b',
+        enable_publishing:false,
+        hide_top_toolbar:false,
+        container_id:'coin-tv-widget'
+      });
+    }
+  };
+
+  if(window.TradingView)render();
+  else setTimeout(render,800);
+}
+
+$$('[data-close]').forEach(b=>b.onclick=()=>$('#'+b.dataset.close).close());
+
+async function refreshAll(){
+  await renderDashboard();
+
+  if(currentView==='goals')await renderGoals();
+  if(currentView==='analytics')await renderAnalytics();
+  if(currentView==='journal')await renderJournal();
+  if(currentView==='transactions')await renderTransactions();
+}
+
+async function init(){
+  try{
+    await openDB();
+
+    $('#db-status').textContent='IndexedDB ready · records stored locally in this browser';
+
+    $('#backup-status').textContent=localStorage.getItem('crypto-last-backup')
+      ?`Last backup exported: ${new Date(localStorage.getItem('crypto-last-backup')).toLocaleString()}`
+      :'Last backup: not recorded';
+
+  }catch(e){
+    $('#db-status').textContent='IndexedDB unavailable: '+e.message;
+    toast('Local database unavailable. Try a supported modern browser.');
+  }
+
+  setupMarketEvents(openCoin);
+
+  $('#market-body').addEventListener('click',()=>{});
+
+  window.addEventListener('online',()=>toast('Connection restored.'));
+  window.addEventListener('offline',()=>toast('You are offline. Market prices may be stale; local records remain available.'));
+
+  await initMarket(p=>renderDashboard(p));
+
+  await refreshAll();
+
+  if(window.TradingView){
+    new TradingView.widget({
+      autosize:true,
+      symbol:'BINANCE:BTCUSDT',
+      interval:'D',
+      timezone:'Etc/UTC',
+      theme:'dark',
+      style:'1',
+      locale:'en',
+      toolbar_bg:'#111a2b',
+      enable_publishing:false,
+      hide_top_toolbar:false,
+      container_id:'tradingview-chart'
+    });
+
+  }else{
+    $('#tradingview-chart').innerHTML='<div class="empty-state">TradingView chart is unavailable. Market and ledger features remain usable.</div>';
+  }
+}
+
 init();
